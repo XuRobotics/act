@@ -21,65 +21,59 @@ class EpisodicDataset(torch.utils.data.Dataset):
         return len(self.episode_ids)
 
     def __getitem__(self, index):
-        sample_full_episode = False # hardcode
+        chunk_size = 100  # You can also pass this as a class argument
 
         episode_id = self.episode_ids[index]
         dataset_path = os.path.join(self.dataset_dir, f"episode_{episode_id:04d}.h5")
+
+        is_pad = None
         with h5py.File(dataset_path, 'r') as root:
             is_sim = root.attrs.get('sim', False)
+            actions = root['actions'][:]
+            episode_len = actions.shape[0]
 
-            original_action_shape = root['/actions'].shape
-            episode_len = original_action_shape[0]
-            if sample_full_episode:
-                start_ts = 0
+            # --- Choose a start time ---
+            if episode_len >= chunk_size:
+                is_pad = np.zeros(chunk_size, dtype=bool)
+                start_ts = np.random.randint(0, episode_len - chunk_size + 1)
+                action = actions[start_ts:start_ts + chunk_size]
             else:
-                start_ts = np.random.choice(episode_len)
-            # get observation at start_ts only
-            # qpos = root['/observations/qpos'][start_ts]
-            # qvel = root['/observations/qvel'][start_ts]
+                # print(f"Episode {episode_id} is shorter than chunk size {chunk_size}. Padding with last action.")
+                start_ts = 0
+                pad_len = chunk_size - episode_len
+                pad = np.repeat(actions[-1][None, :], pad_len, axis=0)
+                action = np.concatenate([actions, pad], axis=0)
+                is_pad = np.zeros(chunk_size, dtype=bool)
+                is_pad[episode_len:] = True  # Mark padded steps as True
+
+            # --- Observation at start_ts ---
             pos = root['ee_positions'][start_ts]
             ori = root['ee_orientations'][start_ts]
             grip = root['gripper_opening'][start_ts]
             qpos = np.concatenate([pos, ori, [grip]], axis=0)
-            image_dict = dict()
-            for cam_name in self.camera_names:
-                image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
-            # get all actions after and including start_ts
-            if is_sim:
-                action = root['/actions'][start_ts:]
-                action_len = episode_len - start_ts
-            else:
-                action = root['/actions'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
-                action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
+
+            # --- RGB image at start_ts from all cameras ---
+            image_dict = {
+                cam_name: root[f'{cam_name}_images'][start_ts]
+                for cam_name in self.camera_names
+            }
+            all_cam_images = np.stack([image_dict[c] for c in self.camera_names], axis=0)
 
         self.is_sim = is_sim
-        padded_action = np.zeros(original_action_shape, dtype=np.float32)
-        padded_action[:action_len] = action
-        is_pad = np.zeros(episode_len)
-        is_pad[action_len:] = 1
 
-        # new axis for different cameras
-        all_cam_images = []
-        for cam_name in self.camera_names:
-            all_cam_images.append(image_dict[cam_name])
-        all_cam_images = np.stack(all_cam_images, axis=0)
+        # --- Convert to tensors ---
+        image_data = torch.from_numpy(all_cam_images).float() / 255.0
+        image_data = image_data.permute(0, 3, 1, 2)  # (K, C, H, W)
 
-        # construct observations
-        image_data = torch.from_numpy(all_cam_images)
         qpos_data = torch.from_numpy(qpos).float()
-        action_data = torch.from_numpy(padded_action).float()
-        is_pad = torch.from_numpy(is_pad).bool()
+        action_data = torch.from_numpy(action).float()
 
-        # channel last
-        image_data = torch.einsum('k h w c -> k c h w', image_data)
-
-        # normalize image and change dtype to float
-        image_data = image_data / 255.0
-        action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
+        # --- Normalize ---
         qpos_data = (qpos_data - self.norm_stats["ee_pos_ori_grip_mean"]) / self.norm_stats["ee_pos_ori_grip_std"]
-
+        action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
 
         return image_data, qpos_data, action_data, is_pad
+
 
 
 # def get_norm_stats(dataset_dir, num_episodes):
