@@ -1,3 +1,5 @@
+**Note**: For preparing demonstration data and training ACT on xArm, refer to the setup, data conversion, and training instructions provided [here](https://github.com/XuRobotics/xArm-MSL-ROS)
+
 # ACT: Action Chunking with Transformers
 
 ### *New*: [ACT tuning tips](https://docs.google.com/document/d/1FVIZfoALXg_ZkYKaYVh-qOlaXveq5CtvJHXkY25eYhs/edit?usp=sharing)
