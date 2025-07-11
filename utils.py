@@ -4,8 +4,8 @@ import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
 
-import IPython
-e = IPython.embed
+# import IPython
+# e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):
@@ -24,27 +24,32 @@ class EpisodicDataset(torch.utils.data.Dataset):
         sample_full_episode = False # hardcode
 
         episode_id = self.episode_ids[index]
-        dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
+        dataset_path = os.path.join(self.dataset_dir, f"episode_{episode_id:04d}.h5")
         with h5py.File(dataset_path, 'r') as root:
-            is_sim = root.attrs['sim']
-            original_action_shape = root['/action'].shape
+            is_sim = root.attrs.get('sim', False)
+
+            original_action_shape = root['/actions'].shape
             episode_len = original_action_shape[0]
             if sample_full_episode:
                 start_ts = 0
             else:
                 start_ts = np.random.choice(episode_len)
             # get observation at start_ts only
-            qpos = root['/observations/qpos'][start_ts]
-            qvel = root['/observations/qvel'][start_ts]
+            # qpos = root['/observations/qpos'][start_ts]
+            # qvel = root['/observations/qvel'][start_ts]
+            pos = root['ee_positions'][start_ts]
+            ori = root['ee_orientations'][start_ts]
+            grip = root['gripper_opening'][start_ts]
+            qpos = np.concatenate([pos, ori, [grip]], axis=0)
             image_dict = dict()
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
             # get all actions after and including start_ts
             if is_sim:
-                action = root['/action'][start_ts:]
+                action = root['/actions'][start_ts:]
                 action_len = episode_len - start_ts
             else:
-                action = root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
+                action = root['/actions'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
                 action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
 
         self.is_sim = is_sim
@@ -71,43 +76,76 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # normalize image and change dtype to float
         image_data = image_data / 255.0
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
-        qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
+        qpos_data = (qpos_data - self.norm_stats["ee_pos_ori_grip_mean"]) / self.norm_stats["ee_pos_ori_grip_std"]
+
 
         return image_data, qpos_data, action_data, is_pad
 
 
+# def get_norm_stats(dataset_dir, num_episodes):
+#     all_qpos_data = []
+#     all_action_data = []
+#     for episode_idx in range(num_episodes):
+#         print(f"Modified utils.py for loading xArm dataset")
+#         dataset_path = os.path.join(dataset_dir, f"episode_{episode_idx:04d}.h5")
+#         with h5py.File(dataset_path, 'r') as root:
+#             qpos = root['/observations/qpos'][()] 
+#             qvel = root['/observations/qvel'][()]
+#             action = root['/action'][()]
+#         all_qpos_data.append(torch.from_numpy(qpos))
+#         all_action_data.append(torch.from_numpy(action))
+#     all_qpos_data = torch.stack(all_qpos_data)
+#     all_action_data = torch.stack(all_action_data)
+#     all_action_data = all_action_data
+
+#     # normalize action data
+#     action_mean = all_action_data.mean(dim=[0, 1], keepdim=True)
+#     action_std = all_action_data.std(dim=[0, 1], keepdim=True)
+#     action_std = torch.clip(action_std, 1e-2, np.inf) # clipping
+
+#     # normalize qpos data
+#     qpos_mean = all_qpos_data.mean(dim=[0, 1], keepdim=True)
+#     qpos_std = all_qpos_data.std(dim=[0, 1], keepdim=True)
+#     qpos_std = torch.clip(qpos_std, 1e-2, np.inf) # clipping
+
+#     stats = {"action_mean": action_mean.numpy().squeeze(), "action_std": action_std.numpy().squeeze(),
+#              "qpos_mean": qpos_mean.numpy().squeeze(), "qpos_std": qpos_std.numpy().squeeze(),
+#              "example_qpos": qpos}
+
+#     return stats
+
+
+
 def get_norm_stats(dataset_dir, num_episodes):
-    all_qpos_data = []
-    all_action_data = []
-    for episode_idx in range(num_episodes):
-        dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}.hdf5')
-        with h5py.File(dataset_path, 'r') as root:
-            qpos = root['/observations/qpos'][()]
-            qvel = root['/observations/qvel'][()]
-            action = root['/action'][()]
-        all_qpos_data.append(torch.from_numpy(qpos))
-        all_action_data.append(torch.from_numpy(action))
-    all_qpos_data = torch.stack(all_qpos_data)
-    all_action_data = torch.stack(all_action_data)
-    all_action_data = all_action_data
+    all_qpos = []
+    all_action = []
 
-    # normalize action data
-    action_mean = all_action_data.mean(dim=[0, 1], keepdim=True)
-    action_std = all_action_data.std(dim=[0, 1], keepdim=True)
-    action_std = torch.clip(action_std, 1e-2, np.inf) # clipping
+    print(f"Modified utils.py for EE pose loading")
 
-    # normalize qpos data
-    qpos_mean = all_qpos_data.mean(dim=[0, 1], keepdim=True)
-    qpos_std = all_qpos_data.std(dim=[0, 1], keepdim=True)
-    qpos_std = torch.clip(qpos_std, 1e-2, np.inf) # clipping
+    for i in range(num_episodes):
+        path = os.path.join(dataset_dir, f"episode_{i:04d}.h5")
+        if not os.path.exists(path): continue
 
-    stats = {"action_mean": action_mean.numpy().squeeze(), "action_std": action_std.numpy().squeeze(),
-             "qpos_mean": qpos_mean.numpy().squeeze(), "qpos_std": qpos_std.numpy().squeeze(),
-             "example_qpos": qpos}
+        with h5py.File(path, "r") as f:
+            pos = f["ee_positions"][:]
+            ori = f["ee_orientations"][:]
+            grip = f["gripper_opening"][:].reshape(-1, 1)
+            qpos = np.concatenate([pos, ori, grip], axis=1)
+            action = f["actions"][:]
 
-    return stats
+        all_qpos.append(torch.from_numpy(qpos))
+        all_action.append(torch.from_numpy(action))
 
+    all_qpos = torch.cat(all_qpos, dim=0)
+    all_action = torch.cat(all_action, dim=0)
 
+    return {
+        "ee_pos_ori_grip_mean": all_qpos.mean(dim=0).numpy(),
+        "ee_pos_ori_grip_std": torch.clamp(all_qpos.std(dim=0), min=1e-2).numpy(),
+        "action_mean": all_action.mean(dim=0).numpy(),
+        "action_std": torch.clamp(all_action.std(dim=0), min=1e-2).numpy()
+    }
+    
 def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val):
     print(f'\nData from: {dataset_dir}\n')
     # obtain train test split

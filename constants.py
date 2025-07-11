@@ -1,4 +1,31 @@
 import pathlib
+import os
+import h5py
+
+# Automatically determine num_episodes and episode_len for real data
+REAL_DATASET_DIR = "/home/xarm/bags/msl_bags/converted_act_data"
+real_files = [f for f in os.listdir(REAL_DATASET_DIR) if f.endswith(".h5")]
+real_num_episodes = len(real_files)
+
+# Estimate average episode length
+episode_lengths = []
+for fname in real_files:
+    with h5py.File(os.path.join(REAL_DATASET_DIR, fname), "r") as f:
+        episode_lengths.append(f["ee_positions"].shape[0])
+real_episode_len = int(sum(episode_lengths) / len(episode_lengths)) if episode_lengths else 0
+
+print (f"Real dataset: {real_num_episodes} episodes, average episode length: {real_episode_len}")
+
+REAL_TASK_CONFIGS = {
+    "xarm_pick_place": {
+        "dataset_dir": REAL_DATASET_DIR,
+        "camera_names": ["fixed", "wrist"],
+        "action_dim": 10,
+        "num_episodes": real_num_episodes,
+        "episode_len": real_episode_len
+    }
+}
+
 
 ### Task parameters
 DATA_DIR = '<put your data dir here>'
@@ -74,3 +101,9 @@ PUPPET_POS2JOINT = lambda x: PUPPET_GRIPPER_POSITION_NORMALIZE_FN(x) * (PUPPET_G
 PUPPET_JOINT2POS = lambda x: PUPPET_GRIPPER_POSITION_UNNORMALIZE_FN((x - PUPPET_GRIPPER_JOINT_CLOSE) / (PUPPET_GRIPPER_JOINT_OPEN - PUPPET_GRIPPER_JOINT_CLOSE))
 
 MASTER_GRIPPER_JOINT_MID = (MASTER_GRIPPER_JOINT_OPEN + MASTER_GRIPPER_JOINT_CLOSE)/2
+
+
+# Merge SIM and REAL configs into one dict for universal lookup
+TASK_CONFIGS = {}
+TASK_CONFIGS.update(SIM_TASK_CONFIGS)
+TASK_CONFIGS.update(REAL_TASK_CONFIGS)
