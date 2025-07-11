@@ -65,7 +65,7 @@ def main(args):
                          'enc_layers': enc_layers,
                          'dec_layers': dec_layers,
                          'nheads': nheads,
-                         'camera_names': camera_names,
+                         'camera_names': camera_names
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
@@ -86,7 +86,8 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'resume_ckpt_path': args['resume_ckpt_path']
     }
 
     if is_eval:
@@ -332,12 +333,25 @@ def train_bc(train_dataloader, val_dataloader, config):
     policy = make_policy(policy_class, policy_config)
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
+    
+    resume_ckpt = config.get("resume_ckpt_path", None)
+    start_epoch = 0
+    if resume_ckpt is not None:
+        print(f"Resuming training from checkpoint: {resume_ckpt}")
+        ckpt = torch.load(resume_ckpt, map_location='cuda')
+        policy.load_state_dict(ckpt)
+        # # assume the same name is policy_epoch_XXXX_seed_X.ckpt
+        # start_epoch = int(resume_ckpt.split('_')[-3]) + 1
+        # print(f"CONFIRM THAT THIS IS CORRECT: Resuming from epoch {start_epoch}")
+        # print(f"CONFIRM THAT THIS IS CORRECT: Resuming from epoch {start_epoch}")
+        # # press enter to continue
+        # input("Press Enter to CONFIRM and continue...")
 
     train_history = []
     validation_history = []
     min_val_loss = np.inf
     best_ckpt_info = None
-    for epoch in tqdm(range(num_epochs)):
+    for epoch in tqdm(range(start_epoch, num_epochs)):
         print(f'\nEpoch {epoch}')
         # validation
         with torch.inference_mode():
@@ -433,4 +447,6 @@ if __name__ == '__main__':
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
     
+    parser.add_argument('--resume_ckpt_path', type=str, default=None,
+                    help='Path to checkpoint to resume training from')
     main(vars(parser.parse_args()))
