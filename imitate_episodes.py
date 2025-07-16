@@ -217,6 +217,7 @@ def eval_bc_offline(config, ckpt_name):
             with torch.inference_mode():
                 pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
                 pred_action = pred_action_seq.detach().cpu().numpy()
+                pred_action = pred_action * stats['action_std'] + stats['action_mean']  # <--- UNNORMALIZE HERE
                 all_pred_actions.append(pred_action.squeeze())
 
             print(f"Step {t}: predicted action (first 3): {np.round(pred_action[:3], 3)}")
