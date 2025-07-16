@@ -17,7 +17,10 @@ from policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
 
 from sim_env import BOX_POSE
-
+import h5py
+import glob
+import os
+from utils import sample_box_pose, sample_insertion_pose
 import IPython
 e = IPython.embed
 
@@ -87,14 +90,18 @@ def main(args):
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
         'real_robot': not is_sim,
-        'resume_ckpt_path': args['resume_ckpt_path']
+        'resume_ckpt_path': args['resume_ckpt_path'],
+        'dataset_dir': dataset_dir,
+        'num_episodes': num_episodes
     }
 
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            # success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            # NOTE: replaced above with this function to work with xarm pick place dataset
+            success_rate, avg_return = eval_bc_offline(config, ckpt_name)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -149,6 +156,70 @@ def get_image(ts, camera_names):
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
+
+
+def eval_bc_offline(config, ckpt_name):
+    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
+    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
+    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
+    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
+    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
+    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
+    # press enter to continue
+    input("Press Enter to continue...")
+
+    # Load policy and stats
+    ckpt_path = os.path.join(config['ckpt_dir'], ckpt_name)
+    policy = make_policy(config['policy_class'], config['policy_config'])
+    policy.load_state_dict(torch.load(ckpt_path))
+    policy.cuda()
+    policy.eval()
+    print(f"Loaded policy from: {ckpt_path}")
+
+    stats_path = os.path.join(config['ckpt_dir'], f'dataset_stats.pkl')
+    with open(stats_path, 'rb') as f:
+        stats = pickle.load(f)
+
+    pre_process = lambda x: (x - stats["ee_pos_ori_grip_mean"]) / stats["ee_pos_ori_grip_std"]
+
+    dataset_dir = config["dataset_dir"]
+    camera_names = config["camera_names"]
+    chunk_size = config["policy_config"]["num_queries"]
+
+    episode_paths = sorted(glob.glob(os.path.join(dataset_dir, "episode_*.h5")))
+    print(f"Found {len(episode_paths)} episodes for offline eval.")
+
+    for idx, ep_path in enumerate(episode_paths[:5]):  # limit for testing
+        print(f"\n--- Episode {idx}: {ep_path}")
+        with h5py.File(ep_path, "r") as f:
+            pos = f["ee_positions"][:]
+            ori = f["ee_orientations"][:]
+            grip = f["gripper_opening"][:].reshape(-1, 1)
+            qpos = np.concatenate([pos, ori, grip], axis=1)
+
+            images = []
+            for cam in camera_names:
+                cam_imgs = f[f"{cam}_images"][:]
+                images.append(cam_imgs)
+            images = np.stack(images, axis=1)  # (T, num_cam, H, W, 3)
+
+        for t in range(len(qpos)):
+            if t + chunk_size > len(qpos):
+                break
+            obs_qpos = pre_process(qpos[t])
+            obs_image = images[t]
+
+            image_tensor = torch.from_numpy(obs_image).float().permute(0, 3, 1, 2).unsqueeze(0) / 255.0
+            qpos_tensor = torch.from_numpy(obs_qpos).float().unsqueeze(0)
+
+            with torch.inference_mode():
+                pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
+                pred_action = pred_action_seq.detach().cpu().numpy()
+
+            print(f"Step {t}: predicted action (first 3): {np.round(pred_action[:3], 3)}")
+
+    print("Offline evaluation done.")
+    return 0, 0  # dummy success rate and return
 
 def eval_bc(config, ckpt_name, save_episode=True):
     set_seed(1000)
