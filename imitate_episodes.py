@@ -189,7 +189,7 @@ def eval_bc_offline(config, ckpt_name):
     episode_paths = sorted(glob.glob(os.path.join(dataset_dir, "episode_*.h5")))
     print(f"Found {len(episode_paths)} episodes for offline eval.")
 
-    for idx, ep_path in enumerate(episode_paths[:5]):  # limit for testing
+    for idx, ep_path in enumerate(episode_paths):  # limit for testing
         print(f"\n--- Episode {idx}: {ep_path}")
         with h5py.File(ep_path, "r") as f:
             pos = f["ee_positions"][:]
