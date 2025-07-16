@@ -203,7 +203,9 @@ def eval_bc_offline(config, ckpt_name):
                 images.append(cam_imgs)
             images = np.stack(images, axis=1)  # (T, num_cam, H, W, 3)
 
+        all_pred_actions = []
         for t in range(len(qpos)):
+
             if t + chunk_size > len(qpos):
                 break
             obs_qpos = pre_process(qpos[t])
@@ -215,8 +217,15 @@ def eval_bc_offline(config, ckpt_name):
             with torch.inference_mode():
                 pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
                 pred_action = pred_action_seq.detach().cpu().numpy()
+                all_pred_actions.append(pred_action.squeeze())
 
             print(f"Step {t}: predicted action (first 3): {np.round(pred_action[:3], 3)}")
+
+        # === Save predicted actions after finishing the episode ===
+        save_path = os.path.join(config['ckpt_dir'], f"predicted_actions_episode_{idx:04d}.npy")
+        all_pred_actions_np = np.stack(all_pred_actions)  # shape: (T, action_dim)
+        np.save(save_path, all_pred_actions_np)
+        print(f"Saved predicted actions to {save_path}")
 
     print("Offline evaluation done.")
     return 0, 0  # dummy success rate and return
