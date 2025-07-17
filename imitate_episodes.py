@@ -26,7 +26,7 @@ e = IPython.embed
 import cv2
 
 
-IMAGE_RES = (640, 480)  # (width, height)
+
 
 def main(args):
     set_seed(1)
@@ -40,6 +40,9 @@ def main(args):
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
     use_h5py = args['use_h5py']
+    inference_dataset_dir = args['inference_dataset_dir']
+    inference_image_res = (args['inference_image_width'], args['inference_image_height'])
+    
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -106,7 +109,7 @@ def main(args):
         for ckpt_name in ckpt_names:
             # success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
             # NOTE: replaced above with this function to work with xarm pick place dataset
-            success_rate, avg_return = eval_bc_offline(config, ckpt_name, use_h5py=use_h5py)
+            success_rate, avg_return = eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_dataset_dir)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -162,7 +165,7 @@ def get_image(ts, camera_names):
     return curr_image
 
 
-def eval_bc_offline(config, ckpt_name, use_h5py):
+def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_dataset_dir):
     print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
     input("Press Enter to continue...")
 
@@ -225,20 +228,19 @@ def eval_bc_offline(config, ckpt_name, use_h5py):
 
     else:
         print("Using our new format to load data...")
-        print("Image resolution is hard-coded:", IMAGE_RES)
-        # === Our new format ===
-        extracted_dirs = sorted([
-            os.path.join(dataset_dir, d)
-            for d in os.listdir(dataset_dir)
-            if os.path.isdir(os.path.join(dataset_dir, d))
-        ])
-        print(f"Found {len(extracted_dirs)} extracted folders.")
+        print(f"Using inference dataset directory: {inference_dataset_dir}")
+        print(f"Using inference image resolution: {inference_image_res}")
 
-        for idx, folder in enumerate(extracted_dirs):
+        # === Our new format ===
+        folders = [f for f in os.listdir(inference_dataset_dir) if os.path.isdir(os.path.join(inference_dataset_dir, f))]
+        print(f"Found {len(folders)} extracted folders.")
+
+        for idx, folder in enumerate(folders):
+            
             print(f"\n--- Episode {idx}: {folder}")
-            state_path = os.path.join(folder, "state.npy")
-            front_path = os.path.join(folder, "camera_0_frame_0000.png")
-            wrist_path = os.path.join(folder, "camera_1_frame_0000.png")
+            state_path = os.path.join(inference_dataset_dir, folder, "state.npy")
+            front_path = os.path.join(inference_dataset_dir, folder, "camera_0_frame_0000.png")
+            wrist_path = os.path.join(inference_dataset_dir, folder, "camera_1_frame_0000.png")
 
             if not os.path.exists(state_path) or not os.path.exists(front_path) or not os.path.exists(wrist_path):
                 print(f"[{folder}] Missing data. Skipping.")
@@ -256,7 +258,7 @@ def eval_bc_offline(config, ckpt_name, use_h5py):
                 else:
                     raise ValueError(f"Unknown camera: {cam}")
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                img = cv2.resize(img, IMAGE_RES)
+                img = cv2.resize(img, inference_image_res)
                 imgs.append(img)
 
             obs_image = np.stack(imgs, axis=0)  # (num_cams, H, W, 3)
@@ -559,6 +561,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--use_h5py', action='store_true', help='Use h5py to load data, else use preprocessed image + pose data')
+    parser.add_argument('--inference_dataset_dir', action='store', type=str, help='inference_dataset_dir', required=False, default="/home/sam/bags/msl_bags/pick_and_place_NEW_4_20/extracted_images_and_poses")
+    parser.add_argument('--inference_image_width', action='store', type=int, help='inference_image_width', required=False, default=640)
+    parser.add_argument('--inference_image_height', action='store', type=int, help='inference_image_height', required=False, default=480)
     parser.add_argument('--onscreen_render', action='store_true')
     parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
     parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
