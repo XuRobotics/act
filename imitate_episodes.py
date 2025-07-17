@@ -28,7 +28,7 @@ import re
 
 root_dir = "/home/xarm/bags/msl_bags/IMPORTANT-distribution-pick-and-place-raw-bags-30"
 DEFAULT_EXTRACTED_ROOT = os.path.join(root_dir, "extracted_images_and_poses")
-
+CKPT_SAVE_INTERVAL = 1000  # save checkpoint every 1000 epochs
 
 def main(args):
     set_seed(1)
@@ -548,7 +548,8 @@ def train_bc(train_dataloader, val_dataloader, config):
             summary_string += f'{k}: {v.item():.3f} '
         print(summary_string)
 
-        if epoch % 100 == 0:
+        if epoch % CKPT_SAVE_INTERVAL == 0 or epoch == num_epochs - 1:
+            print(f'Saving checkpoint at epoch {epoch}')
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             torch.save(policy.state_dict(), ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)

@@ -3,7 +3,7 @@ import os
 import h5py
 
 # Automatically determine num_episodes and episode_len for real data
-REAL_DATASET_DIR = "/home/xarm/bags/msl_bags/converted_act_data"
+REAL_DATASET_DIR = "/home/xarm/bags/msl_bags/converted_act_data_absolute"
 print(f"Using real dataset directory: {REAL_DATASET_DIR}")
 print(f"Using real dataset directory: {REAL_DATASET_DIR}")
 print(f"Using real dataset directory: {REAL_DATASET_DIR}")
