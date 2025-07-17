@@ -168,8 +168,10 @@ def get_image(ts, camera_names):
 
 
 def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_dataset_dir):
+    print(f"+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
     print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
-    input("Press Enter to continue...")
+    print(f"+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+    # input("Press Enter to continue...")
 
     ckpt_path = os.path.join(config['ckpt_dir'], ckpt_name)
     policy = make_policy(config['policy_class'], config['policy_config'])
@@ -183,6 +185,8 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
         stats = pickle.load(f)
 
     pre_process = lambda x: (x - stats["ee_pos_ori_grip_mean"]) / stats["ee_pos_ori_grip_std"]
+    print(f"ee_pos_ori_grip_mean: {stats['ee_pos_ori_grip_mean']}, ee_pos_ori_grip_std: {stats['ee_pos_ori_grip_std']}")
+    # input("Press Enter to continue...")
 
     dataset_dir = config["dataset_dir"]
     camera_names = config["camera_names"]
@@ -190,6 +194,11 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
 
     if use_h5py:
         print("Using h5py to load data...")
+        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
+        print("Current rollout is step-by-step, one observation outputs multiple actions but only records one action.")
+        print("You can modify to record action chunks. See below (search action chunk size can be changed here).")
+        input("Press Enter to continue...")
+        print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
         episode_paths = sorted(glob.glob(os.path.join(dataset_dir, "episode_*.h5")))
         print(f"Found {len(episode_paths)} episodes for offline eval.")
         for idx, ep_path in enumerate(episode_paths):
@@ -217,7 +226,8 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
                 qpos_tensor = torch.from_numpy(obs_qpos).float().unsqueeze(0)
 
                 with torch.inference_mode():
-                    pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
+                    # TODO: action chunk size can be changed here
+                    pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0] # CHANGE HERE IF YOU WANT MULTIPLE ACTIONS
                     pred_action = pred_action_seq.detach().cpu().numpy()
                     pred_action = pred_action * stats['action_std'] + stats['action_mean']
                     all_pred_actions.append(pred_action.squeeze())
@@ -268,9 +278,9 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
 
             imgs = []
             for cam in camera_names:
-                if cam in ["front", "main", "camera_0"]:
+                if cam in ["fixed"]:
                     img = cv2.imread(front_path)
-                elif cam in ["wrist", "camera_1"]:
+                elif cam in ["wrist"]:
                     img = cv2.imread(wrist_path)
                 else:
                     raise ValueError(f"Unknown camera: {cam}")
@@ -284,13 +294,13 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
             qpos_tensor = torch.from_numpy(obs_qpos).float().unsqueeze(0)
 
             with torch.inference_mode():
-                pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
-                pred_action = pred_action_seq.detach().cpu().numpy()
+                pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())  # (1, num_queries, action_dim)
+                pred_action = pred_action_seq.detach().cpu().numpy()[0]  # remove batch dimension (shape: num_queries x action_dim)
                 pred_action = pred_action * stats['action_std'] + stats['action_mean']
 
-            save_path = os.path.join(config['ckpt_dir'], f"predicted_action_episode_{idx:04d}.npy")
+            save_path = os.path.join(config['ckpt_dir'], f"predicted_actions_episode_{idx:04d}.npy")
             np.save(save_path, pred_action)
-            print(f"Saved predicted action to {save_path}")
+            print(f"Saved predicted actions to {save_path}")
 
     print("Offline evaluation done.")
     return 0, 0
