@@ -24,8 +24,10 @@ from utils import sample_box_pose, sample_insertion_pose
 import IPython
 e = IPython.embed
 import cv2
+import re
 
-
+root_dir = "/home/xarm/bags/msl_bags/IMPORTANT-distribution-pick-and-place-raw-bags-30"
+DEFAULT_EXTRACTED_ROOT = os.path.join(root_dir, "extracted_images_and_poses")
 
 
 def main(args):
@@ -232,7 +234,21 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
         print(f"Using inference image resolution: {inference_image_res}")
 
         # === Our new format ===
-        folders = [f for f in os.listdir(inference_dataset_dir) if os.path.isdir(os.path.join(inference_dataset_dir, f))]
+        def extract_timestamp(folder_name):
+            # Extract the timestamp part: "2025-03-19-10-52-50" from folder name like "xarm_demo_2025-03-19-10-52-50"
+            match = re.search(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", folder_name)
+            return match.group() if match else ""
+
+
+
+
+        folders = [
+            f for f in os.listdir(inference_dataset_dir)
+            if os.path.isdir(os.path.join(inference_dataset_dir, f))
+        ]
+        folders = sorted(folders, key=extract_timestamp)
+        
+        
         print(f"Found {len(folders)} extracted folders.")
 
         for idx, folder in enumerate(folders):
@@ -241,6 +257,7 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
             state_path = os.path.join(inference_dataset_dir, folder, "state.npy")
             front_path = os.path.join(inference_dataset_dir, folder, "camera_0_frame_0000.png")
             wrist_path = os.path.join(inference_dataset_dir, folder, "camera_1_frame_0000.png")
+            print(f"Paths: {state_path}, {front_path}, {wrist_path}")
 
             if not os.path.exists(state_path) or not os.path.exists(front_path) or not os.path.exists(wrist_path):
                 print(f"[{folder}] Missing data. Skipping.")
@@ -561,7 +578,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--use_h5py', action='store_true', help='Use h5py to load data, else use preprocessed image + pose data')
-    parser.add_argument('--inference_dataset_dir', action='store', type=str, help='inference_dataset_dir', required=False, default="/home/sam/bags/msl_bags/pick_and_place_NEW_4_20/extracted_images_and_poses")
+    parser.add_argument('--inference_dataset_dir', action='store', type=str, help='inference_dataset_dir', required=False, default=DEFAULT_EXTRACTED_ROOT)
     parser.add_argument('--inference_image_width', action='store', type=int, help='inference_image_width', required=False, default=640)
     parser.add_argument('--inference_image_height', action='store', type=int, help='inference_image_height', required=False, default=480)
     parser.add_argument('--onscreen_render', action='store_true')
