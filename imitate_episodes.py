@@ -23,6 +23,10 @@ import os
 from utils import sample_box_pose, sample_insertion_pose
 import IPython
 e = IPython.embed
+import cv2
+
+
+IMAGE_RES = (640, 480)  # (width, height)
 
 def main(args):
     set_seed(1)
@@ -35,6 +39,7 @@ def main(args):
     batch_size_train = args['batch_size']
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
+    use_h5py = args['use_h5py']
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -101,7 +106,7 @@ def main(args):
         for ckpt_name in ckpt_names:
             # success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
             # NOTE: replaced above with this function to work with xarm pick place dataset
-            success_rate, avg_return = eval_bc_offline(config, ckpt_name)
+            success_rate, avg_return = eval_bc_offline(config, ckpt_name, use_h5py=use_h5py)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -157,18 +162,10 @@ def get_image(ts, camera_names):
     return curr_image
 
 
-
-def eval_bc_offline(config, ckpt_name):
+def eval_bc_offline(config, ckpt_name, use_h5py):
     print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
-    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
-    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
-    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
-    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
-    print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
-    # press enter to continue
     input("Press Enter to continue...")
 
-    # Load policy and stats
     ckpt_path = os.path.join(config['ckpt_dir'], ckpt_name)
     policy = make_policy(config['policy_class'], config['policy_config'])
     policy.load_state_dict(torch.load(ckpt_path))
@@ -186,30 +183,83 @@ def eval_bc_offline(config, ckpt_name):
     camera_names = config["camera_names"]
     chunk_size = config["policy_config"]["num_queries"]
 
-    episode_paths = sorted(glob.glob(os.path.join(dataset_dir, "episode_*.h5")))
-    print(f"Found {len(episode_paths)} episodes for offline eval.")
+    if use_h5py:
+        print("Using h5py to load data...")
+        episode_paths = sorted(glob.glob(os.path.join(dataset_dir, "episode_*.h5")))
+        print(f"Found {len(episode_paths)} episodes for offline eval.")
+        for idx, ep_path in enumerate(episode_paths):
+            print(f"\n--- Episode {idx}: {ep_path}")
+            with h5py.File(ep_path, "r") as f:
+                pos = f["ee_positions"][:]
+                ori = f["ee_orientations"][:]
+                grip = f["gripper_opening"][:].reshape(-1, 1)
+                qpos = np.concatenate([pos, ori, grip], axis=1)
 
-    for idx, ep_path in enumerate(episode_paths):  # limit for testing
-        print(f"\n--- Episode {idx}: {ep_path}")
-        with h5py.File(ep_path, "r") as f:
-            pos = f["ee_positions"][:]
-            ori = f["ee_orientations"][:]
-            grip = f["gripper_opening"][:].reshape(-1, 1)
-            qpos = np.concatenate([pos, ori, grip], axis=1)
+                images = []
+                for cam in camera_names:
+                    cam_imgs = f[f"{cam}_images"][:]
+                    images.append(cam_imgs)
+                images = np.stack(images, axis=1)  # (T, num_cam, H, W, 3)
 
-            images = []
+            all_pred_actions = []
+            for t in range(len(qpos)):
+                if t + chunk_size > len(qpos):
+                    break
+                obs_qpos = pre_process(qpos[t])
+                obs_image = images[t]
+
+                image_tensor = torch.from_numpy(obs_image).float().permute(0, 3, 1, 2).unsqueeze(0) / 255.0
+                qpos_tensor = torch.from_numpy(obs_qpos).float().unsqueeze(0)
+
+                with torch.inference_mode():
+                    pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
+                    pred_action = pred_action_seq.detach().cpu().numpy()
+                    pred_action = pred_action * stats['action_std'] + stats['action_mean']
+                    all_pred_actions.append(pred_action.squeeze())
+
+                print(f"Step {t}: predicted action (first 3): {np.round(pred_action[:3], 3)}")
+
+            save_path = os.path.join(config['ckpt_dir'], f"predicted_actions_episode_{idx:04d}.npy")
+            np.save(save_path, np.stack(all_pred_actions))
+            print(f"Saved predicted actions to {save_path}")
+
+    else:
+        print("Using our new format to load data...")
+        print("Image resolution is hard-coded:", IMAGE_RES)
+        # === Our new format ===
+        extracted_dirs = sorted([
+            os.path.join(dataset_dir, d)
+            for d in os.listdir(dataset_dir)
+            if os.path.isdir(os.path.join(dataset_dir, d))
+        ])
+        print(f"Found {len(extracted_dirs)} extracted folders.")
+
+        for idx, folder in enumerate(extracted_dirs):
+            print(f"\n--- Episode {idx}: {folder}")
+            state_path = os.path.join(folder, "state.npy")
+            front_path = os.path.join(folder, "camera_0_frame_0000.png")
+            wrist_path = os.path.join(folder, "camera_1_frame_0000.png")
+
+            if not os.path.exists(state_path) or not os.path.exists(front_path) or not os.path.exists(wrist_path):
+                print(f"[{folder}] Missing data. Skipping.")
+                continue
+
+            state_vec = np.load(state_path).reshape(1, -1)  # shape (1, 10)
+            obs_qpos = pre_process(state_vec[0])  # (10,)
+
+            imgs = []
             for cam in camera_names:
-                cam_imgs = f[f"{cam}_images"][:]
-                images.append(cam_imgs)
-            images = np.stack(images, axis=1)  # (T, num_cam, H, W, 3)
+                if cam in ["front", "main", "camera_0"]:
+                    img = cv2.imread(front_path)
+                elif cam in ["wrist", "camera_1"]:
+                    img = cv2.imread(wrist_path)
+                else:
+                    raise ValueError(f"Unknown camera: {cam}")
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img = cv2.resize(img, IMAGE_RES)
+                imgs.append(img)
 
-        all_pred_actions = []
-        for t in range(len(qpos)):
-
-            if t + chunk_size > len(qpos):
-                break
-            obs_qpos = pre_process(qpos[t])
-            obs_image = images[t]
+            obs_image = np.stack(imgs, axis=0)  # (num_cams, H, W, 3)
 
             image_tensor = torch.from_numpy(obs_image).float().permute(0, 3, 1, 2).unsqueeze(0) / 255.0
             qpos_tensor = torch.from_numpy(obs_qpos).float().unsqueeze(0)
@@ -217,19 +267,15 @@ def eval_bc_offline(config, ckpt_name):
             with torch.inference_mode():
                 pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
                 pred_action = pred_action_seq.detach().cpu().numpy()
-                pred_action = pred_action * stats['action_std'] + stats['action_mean']  # <--- UNNORMALIZE HERE
-                all_pred_actions.append(pred_action.squeeze())
+                pred_action = pred_action * stats['action_std'] + stats['action_mean']
 
-            print(f"Step {t}: predicted action (first 3): {np.round(pred_action[:3], 3)}")
-
-        # === Save predicted actions after finishing the episode ===
-        save_path = os.path.join(config['ckpt_dir'], f"predicted_actions_episode_{idx:04d}.npy")
-        all_pred_actions_np = np.stack(all_pred_actions)  # shape: (T, action_dim)
-        np.save(save_path, all_pred_actions_np)
-        print(f"Saved predicted actions to {save_path}")
+            save_path = os.path.join(config['ckpt_dir'], f"predicted_action_episode_{idx:04d}.npy")
+            np.save(save_path, pred_action)
+            print(f"Saved predicted action to {save_path}")
 
     print("Offline evaluation done.")
-    return 0, 0  # dummy success rate and return
+    return 0, 0
+
 
 def eval_bc(config, ckpt_name, save_episode=True):
     set_seed(1000)
@@ -512,6 +558,7 @@ def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval', action='store_true')
+    parser.add_argument('--use_h5py', action='store_true', help='Use h5py to load data, else use preprocessed image + pose data')
     parser.add_argument('--onscreen_render', action='store_true')
     parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
     parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', required=True)
