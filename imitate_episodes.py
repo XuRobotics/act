@@ -1,3 +1,4 @@
+import time
 import torch
 import numpy as np
 import os
@@ -27,7 +28,7 @@ import cv2
 import re
 
 root_dir = "/home/xarm/bags/msl_bags/IMPORTANT-distribution-pick-and-place-raw-bags-30"
-DEFAULT_EXTRACTED_ROOT = os.path.join(root_dir, "extracted_images_and_poses")
+DEFAULT_EXTRACTED_ROOT = os.path.join(root_dir, "extracted_images_and_poses_perturbed")
 CKPT_SAVE_INTERVAL = 1000  # save checkpoint every 1000 epochs
 
 def main(args):
@@ -168,10 +169,16 @@ def get_image(ts, camera_names):
 
 
 def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_dataset_dir):
+    inference_times = []
+    if use_h5py:
+        log_file_path = os.path.join(config['ckpt_dir'], "inference_times_h5py.txt")
+    else:
+        log_file_path = os.path.join(config['ckpt_dir'], "inference_times_new_format.txt")
+    log_file = open(log_file_path, "w")
+
     print(f"+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
     print(f"WARNING: THIS SHOULD ONLY APPEAR WHEN YOU TRY TO RUN EVALUATION ON WITH XARM PICK PLACE DATASET")
     print(f"+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-    # input("Press Enter to continue...")
 
     ckpt_path = os.path.join(config['ckpt_dir'], ckpt_name)
     policy = make_policy(config['policy_class'], config['policy_config'])
@@ -186,7 +193,6 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
 
     pre_process = lambda x: (x - stats["ee_pos_ori_grip_mean"]) / stats["ee_pos_ori_grip_std"]
     print(f"ee_pos_ori_grip_mean: {stats['ee_pos_ori_grip_mean']}, ee_pos_ori_grip_std: {stats['ee_pos_ori_grip_std']}")
-    # input("Press Enter to continue...")
 
     dataset_dir = config["dataset_dir"]
     camera_names = config["camera_names"]
@@ -225,14 +231,18 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
                 image_tensor = torch.from_numpy(obs_image).float().permute(0, 3, 1, 2).unsqueeze(0) / 255.0
                 qpos_tensor = torch.from_numpy(obs_qpos).float().unsqueeze(0)
 
+                start_time = time.time()
                 with torch.inference_mode():
-                    # TODO: action chunk size can be changed here
-                    pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0] # CHANGE HERE IF YOU WANT MULTIPLE ACTIONS
-                    pred_action = pred_action_seq.detach().cpu().numpy()
-                    pred_action = pred_action * stats['action_std'] + stats['action_mean']
-                    all_pred_actions.append(pred_action.squeeze())
+                    pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())[:, 0]
+                inference_time = time.time() - start_time
+                log_msg = f"[H5PY] Episode {idx} Step {t}: inference time = {inference_time * 1000:.2f} ms"
+                print(log_msg)
+                log_file.write(log_msg + "\n")
+                inference_times.append(inference_time)
 
-                print(f"Step {t}: predicted action (first 3): {np.round(pred_action[:3], 3)}")
+                pred_action = pred_action_seq.detach().cpu().numpy()
+                pred_action = pred_action * stats['action_std'] + stats['action_mean']
+                all_pred_actions.append(pred_action.squeeze())
 
             save_path = os.path.join(config['ckpt_dir'], f"predicted_actions_episode_{idx:04d}.npy")
             np.save(save_path, np.stack(all_pred_actions))
@@ -243,26 +253,19 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
         print(f"Using inference dataset directory: {inference_dataset_dir}")
         print(f"Using inference image resolution: {inference_image_res}")
 
-        # === Our new format ===
         def extract_timestamp(folder_name):
-            # Extract the timestamp part: "2025-03-19-10-52-50" from folder name like "xarm_demo_2025-03-19-10-52-50"
             match = re.search(r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}", folder_name)
             return match.group() if match else ""
-
-
-
 
         folders = [
             f for f in os.listdir(inference_dataset_dir)
             if os.path.isdir(os.path.join(inference_dataset_dir, f))
         ]
         folders = sorted(folders, key=extract_timestamp)
-        
-        
+
         print(f"Found {len(folders)} extracted folders.")
 
         for idx, folder in enumerate(folders):
-            
             print(f"\n--- Episode {idx}: {folder}")
             state_path = os.path.join(inference_dataset_dir, folder, "state.npy")
             front_path = os.path.join(inference_dataset_dir, folder, "camera_0_frame_0000.png")
@@ -293,17 +296,32 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
             image_tensor = torch.from_numpy(obs_image).float().permute(0, 3, 1, 2).unsqueeze(0) / 255.0
             qpos_tensor = torch.from_numpy(obs_qpos).float().unsqueeze(0)
 
+            start_time = time.time()
             with torch.inference_mode():
-                pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())  # (1, num_queries, action_dim)
-                pred_action = pred_action_seq.detach().cpu().numpy()[0]  # remove batch dimension (shape: num_queries x action_dim)
-                pred_action = pred_action * stats['action_std'] + stats['action_mean']
+                pred_action_seq = policy(qpos_tensor.cuda(), image_tensor.cuda())
+            inference_time = time.time() - start_time
+            log_msg = f"[NEW FORMAT] Episode {idx}: inference time = {inference_time * 1000:.2f} ms"
+            print(log_msg)
+            log_file.write(log_msg + "\n")
+            inference_times.append(inference_time)
+
+            pred_action = pred_action_seq.detach().cpu().numpy()[0]
+            pred_action = pred_action * stats['action_std'] + stats['action_mean']
 
             save_path = os.path.join(config['ckpt_dir'], f"predicted_actions_episode_{idx:04d}.npy")
             np.save(save_path, pred_action)
             print(f"Saved predicted actions to {save_path}")
 
+    if inference_times:
+        avg_ms = np.median(inference_times) * 1000
+        summary = f"\n=== Median inference time per step: {avg_ms:.2f} ms ==="
+        print(summary)
+        log_file.write(summary + "\n")
+
+    log_file.close()
     print("Offline evaluation done.")
     return 0, 0
+
 
 
 def eval_bc(config, ckpt_name, save_episode=True):
