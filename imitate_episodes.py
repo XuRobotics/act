@@ -269,6 +269,11 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
         folders = sorted(folders, key=extract_timestamp)
 
         print(f"Found {len(folders)} extracted folders.")
+        # remove all npy files in the ckpt_dir if they exist
+        npy_files = glob.glob(os.path.join(config['ckpt_dir'], "predicted_actions_episode_*.npy"))
+        for npy_file in npy_files:
+            os.remove(npy_file)
+            print(f"Removed existing predicted actions file to avoid confusion: {npy_file}")
 
         for idx, folder in enumerate(folders):
             print(f"\n--- Episode {idx}: {folder}")
