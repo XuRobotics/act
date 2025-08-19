@@ -207,6 +207,11 @@ def eval_bc_offline(config, ckpt_name, use_h5py, inference_image_res, inference_
         print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
         episode_paths = sorted(glob.glob(os.path.join(dataset_dir, "episode_*.h5")))
         print(f"Found {len(episode_paths)} episodes for offline eval.")
+        # remove all npy files in the ckpt_dir if they exist
+        npy_files = glob.glob(os.path.join(config['ckpt_dir'], "predicted_actions_episode_*.npy"))
+        for npy_file in npy_files:
+            os.remove(npy_file)
+            print(f"Removed existing predicted actions file to avoid confusion: {npy_file}")
         for idx, ep_path in enumerate(episode_paths):
             print(f"\n--- Episode {idx}: {ep_path}")
             with h5py.File(ep_path, "r") as f:
